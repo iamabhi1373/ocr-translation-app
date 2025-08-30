@@ -1,105 +1,60 @@
+# app.py
 import streamlit as st
+from google.cloud import vision
+from google.cloud import translate_v2 as translate
+from google.oauth2 import service_account
+from google.api_core.exceptions import GoogleAPIError
 from PIL import Image
 import io
-import os
 
-# Try to import Google Cloud services
-try:
-    from google.cloud import vision
-    from google.cloud import translate_v2 as translate
-    from google.oauth2 import service_account
-    GOOGLE_CLOUD_AVAILABLE = True
-except ImportError:
-    GOOGLE_CLOUD_AVAILABLE = False
+st.set_page_config(page_title="OCR + Translate", layout="centered")
+st.title("📝 OCR + Translation (Google Cloud)")
 
-# Streamlit UI setup
-st.title("Image OCR & Translation Tool")
-st.markdown("Extract text from images and translate it to multiple languages")
+# === Load credentials from streamlit secrets ===
+# In Streamlit Cloud put a [google_cloud] table with the JSON fields.
+service_account_info = st.secrets["google_cloud"]          # dict-like
+creds = service_account.Credentials.from_service_account_info(service_account_info)
 
-# -------------------
-# Load credentials
-# -------------------
-credentials = None
-vision_client = None
-translate_client = None
+# === Initialize clients ===
+vision_client = vision.ImageAnnotatorClient(credentials=creds)
+translate_client = translate.Client(credentials=creds)
 
-if GOOGLE_CLOUD_AVAILABLE:
+st.markdown("Upload an image and I'll extract the text and translate it.")
+
+uploaded_file = st.file_uploader("Choose image", type=["png", "jpg", "jpeg"])
+target_lang = st.text_input("Target language code (e.g. 'hi' for Hindi, 'fr' for French)", value="hi")
+
+if uploaded_file:
+    # show image
+    st.image(uploaded_file, use_column_width=True)
+
+    # read bytes
+    image_bytes = uploaded_file.read()
+    image = vision.Image(content=image_bytes)
+
     try:
-        BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-        credentials_file = os.path.join(BASE_DIR, "credentials.json")
-
-        if os.path.exists(credentials_file):
-            # Local dev: load from file
-            credentials = service_account.Credentials.from_service_account_file(credentials_file)
+        # OCR call
+        response = vision_client.text_detection(image=image)
+        if response.error.message:
+            st.error(f"Vision API error: {response.error.message}")
         else:
-            # Streamlit Cloud: load from secrets
-            if "google_cloud" in st.secrets:
-                creds_dict = dict(st.secrets["google_cloud"])
-                credentials = service_account.Credentials.from_service_account_info(creds_dict)
+            texts = response.text_annotations
+            if not texts:
+                st.warning("No text detected in the image.")
             else:
-                st.error("❌ No credentials found! Please add `credentials.json` locally OR set `[google_cloud]` in Streamlit Secrets.")
-                st.stop()
+                extracted_text = texts[0].description  # full text
+                st.subheader("📖 Extracted Text")
+                st.text_area("Detected text", extracted_text, height=250)
 
-        # Initialize clients
-        vision_client = vision.ImageAnnotatorClient(credentials=credentials)
-        translate_client = translate.Client(credentials=credentials)
-        st.success("✅ Welcome! Services are ready to go. Upload an image 🚀")
-
+                # Translate
+                if target_lang:
+                    try:
+                        translation = translate_client.translate(extracted_text, target_language=target_lang)
+                        st.subheader(f"🌍 Translation — {target_lang}")
+                        st.write(translation.get("translatedText", "(no translatedText returned)"))
+                    except GoogleAPIError as e:
+                        st.error(f"Translation API error: {e}")
+    except GoogleAPIError as e:
+        st.error(f"API error: {e}")
     except Exception as e:
-        st.error(f"❌ **Authentication Error:** {str(e)}")
-        st.markdown("""
-        ### Fix this issue:
-        1. Ensure Vision API & Translation API are enabled in Google Cloud
-        2. Verify your service account has proper permissions
-        3. If running locally → put `credentials.json` in this folder
-        4. If on Streamlit Cloud → paste your JSON into Secrets as `[google_cloud]`
-        """)
-        st.stop()
-else:
-    st.error("❌ **Google Cloud libraries not installed!**")
-    st.markdown("Please install with: `pip install google-cloud-vision google-cloud-translate`")
-    st.stop()
-
-# -------------------
-# App logic
-# -------------------
-uploaded_file = st.file_uploader("Choose an image...", type=["jpg", "jpeg", "png"])
-
-languages = {
-    "en": "English", "hi": "Hindi", "fr": "French", "es": "Spanish",
-    "de": "German", "ta": "Tamil", "te": "Telugu", "bn": "Bengali", "ur": "Urdu"
-}
-target_language = st.selectbox("Translate to", list(languages.keys()), index=1)
-
-if uploaded_file is not None:
-    try:
-        # Display uploaded image
-        image = Image.open(uploaded_file)
-        st.image(image, caption="Uploaded Image", use_column_width=True)
-
-        # Convert to bytes
-        image_bytes = io.BytesIO()
-        image.save(image_bytes, format='PNG')
-        image_bytes = image_bytes.getvalue()
-
-        # OCR
-        vision_image = vision.Image(content=image_bytes)
-        response = vision_client.text_detection(image=vision_image)
-        texts = response.text_annotations
-
-        if texts:
-            extracted_text = texts[0].description.strip()
-            st.subheader("Extracted Text (OCR):")
-            st.text_area("", extracted_text, height=100)
-
-            # Translate
-            result = translate_client.translate(extracted_text, target_language=target_language)
-            translated_text = result['translatedText']
-            st.subheader(f"Translated Text ({languages.get(target_language)}):")
-            st.text_area("", translated_text, height=100)
-        else:
-            st.warning("⚠️ No text detected in the image")
-
-    except Exception as e:
-        st.error(f"❌ **Error processing image:** {str(e)}")
-        st.markdown("Please check your Google Cloud credentials and API permissions.")
+        st.error(f"Unexpected error: {e}")
