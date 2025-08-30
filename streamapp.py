@@ -2,7 +2,6 @@ import streamlit as st
 from PIL import Image
 import io
 import os
-import json
 
 # Try to import Google Cloud services
 try:
@@ -26,25 +25,25 @@ translate_client = None
 
 if GOOGLE_CLOUD_AVAILABLE:
     try:
-        # First try local file
         BASE_DIR = os.path.dirname(os.path.abspath(__file__))
         credentials_file = os.path.join(BASE_DIR, "credentials.json")
 
         if os.path.exists(credentials_file):
+            # Local dev: load from file
             credentials = service_account.Credentials.from_service_account_file(credentials_file)
         else:
-            # Fallback: load from Streamlit secrets (when deployed)
+            # Streamlit Cloud: load from secrets
             if "google_cloud" in st.secrets:
-                creds_json = st.secrets["google_cloud"]
-                credentials = service_account.Credentials.from_service_account_info(creds_json)
+                creds_dict = dict(st.secrets["google_cloud"])
+                credentials = service_account.Credentials.from_service_account_info(creds_dict)
             else:
-                st.error("❌ No credentials found! Please provide `credentials.json` locally or set `google_cloud` in Streamlit Secrets.")
+                st.error("❌ No credentials found! Please add `credentials.json` locally OR set `[google_cloud]` in Streamlit Secrets.")
                 st.stop()
 
         # Initialize clients
         vision_client = vision.ImageAnnotatorClient(credentials=credentials)
         translate_client = translate.Client(credentials=credentials)
-        st.success("✅ Google Cloud services initialized! Upload an image 🚀")
+        st.success("✅ Welcome! Services are ready to go. Upload an image 🚀")
 
     except Exception as e:
         st.error(f"❌ **Authentication Error:** {str(e)}")
@@ -52,17 +51,17 @@ if GOOGLE_CLOUD_AVAILABLE:
         ### Fix this issue:
         1. Ensure Vision API & Translation API are enabled in Google Cloud
         2. Verify your service account has proper permissions
-        3. If running locally → place `credentials.json` in the app folder
-        4. If on Streamlit Cloud → paste the JSON into `Secrets` as `[google_cloud]`
+        3. If running locally → put `credentials.json` in this folder
+        4. If on Streamlit Cloud → paste your JSON into Secrets as `[google_cloud]`
         """)
         st.stop()
 else:
     st.error("❌ **Google Cloud libraries not installed!**")
-    st.markdown("Please install required packages: `pip install google-cloud-vision google-cloud-translate`")
+    st.markdown("Please install with: `pip install google-cloud-vision google-cloud-translate`")
     st.stop()
 
 # -------------------
-# Streamlit App Logic
+# App logic
 # -------------------
 uploaded_file = st.file_uploader("Choose an image...", type=["jpg", "jpeg", "png"])
 
@@ -93,7 +92,7 @@ if uploaded_file is not None:
             st.subheader("Extracted Text (OCR):")
             st.text_area("", extracted_text, height=100)
 
-            # Translation
+            # Translate
             result = translate_client.translate(extracted_text, target_language=target_language)
             translated_text = result['translatedText']
             st.subheader(f"Translated Text ({languages.get(target_language)}):")
